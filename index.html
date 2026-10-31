@@ -1,0 +1,210 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sugar Trade Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2430;--mute:#6b7685;--line:#e3e7ec;--pri:#0f766e;--bad:#c2410c;--good:#15803d}
+@media(prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--ink:#e8edf2;--mute:#8e99a8;--line:#2a323c;--pri:#2dd4bf;--bad:#fb923c;--good:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:70px}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header b{font-size:17px} header small{color:var(--mute)}
+main{padding:14px 16px;max-width:980px;margin:auto}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);z-index:5}
+nav button{flex:1;border:0;background:none;color:var(--mute);padding:10px 2px;font-size:11px}
+nav button.on{color:var(--pri);font-weight:700}
+nav button span{display:block;font-size:18px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:700px){.grid{grid-template-columns:repeat(4,1fr)}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.kpi small{color:var(--mute);display:block;font-size:12px}.kpi b{font-size:20px}
+.bad{color:var(--bad)}.good{color:var(--good)}
+h2{font-size:16px;margin:18px 0 8px;display:flex;justify-content:space-between;align-items:center}
+button.p{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-weight:600}
+button.g{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mute);font-weight:600;font-size:12px}
+.scroll{overflow-x:auto}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font-size:15px;margin-top:4px}
+label{display:block;font-size:12px;color:var(--mute);margin-top:10px}
+.modal{position:fixed;inset:0;background:#0008;display:flex;align-items:flex-end;justify-content:center;z-index:20}
+.modal>div{background:var(--card);width:100%;max-width:520px;max-height:90vh;overflow:auto;border-radius:16px 16px 0 0;padding:16px}
+@media(min-width:700px){.modal{align-items:center}.modal>div{border-radius:16px}}
+.row{display:flex;gap:8px;margin-top:14px}.row button{flex:1}
+.login{max-width:340px;margin:12vh auto;padding:0 16px}
+.tag{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line)}
+a{color:var(--pri)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ===== CONFIG: paste your Supabase keys here to go multi-user. Leave empty = demo mode (data only on this device). ===== */
+const CFG = { SUPABASE_URL: "https://mopmoncswotyrsdwttog.supabase.co", SUPABASE_ANON_KEY: "sb_publishable_i947JnaLxdCugWzh8OOlkA_1ZWQJIK8" };
+
+const sb = (CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY) ? supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
+const S = { clients: [], purchases: [], sales: [], payments: [] };
+let tab = 'dash', me = { name: '', owner: true };
+
+/* ---------- storage adapter ---------- */
+const lsGet = t => JSON.parse(localStorage.getItem('sg_' + t) || '[]');
+const lsSet = (t, a) => localStorage.setItem('sg_' + t, JSON.stringify(a));
+async function dbList(t) {
+  if (sb) { const { data, error } = await sb.from(t).select('*').order('created_at', { ascending: false }); if (error) throw error; return data; }
+  return lsGet(t);
+}
+async function dbInsert(t, row) {
+  if (sb) { const { error } = await sb.from(t).insert(row); if (error) throw error; return; }
+  const a = lsGet(t); a.unshift({ ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() }); lsSet(t, a);
+}
+async function dbDelete(t, id) {
+  if (sb) { const { error } = await sb.from(t).delete().eq('id', id); if (error) throw error; return; }
+  lsSet(t, lsGet(t).filter(r => r.id !== id));
+}
+async function loadAll() { for (const t of Object.keys(S)) S[t] = await dbList(t); }
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const inr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+const num = n => (Math.round((n || 0) * 100) / 100).toLocaleString('en-IN');
+const today = () => new Date().toISOString().slice(0, 10);
+const cname = id => (S.clients.find(c => c.id === id) || {}).name || '—';
+const saleTotal = s => s.qty * s.rate;
+const balance = id => S.sales.filter(s => s.client_id === id).reduce((a, s) => a + saleTotal(s) - (s.paid_now || 0), 0)
+  - S.payments.filter(p => p.client_id === id).reduce((a, p) => a + p.amount, 0);
+const stockQty = () => S.purchases.reduce((a, p) => a + p.qty, 0) - S.sales.reduce((a, s) => a + s.qty, 0);
+const map = (lat, lng) => lat && lng ? `<a target="_blank" href="https://maps.google.com/?q=${lat},${lng}">📍 map</a>` : '';
+function csv(name, rows) {
+  if (!rows.length) return alert('Nothing to export');
+  const keys = Object.keys(rows[0]);
+  const body = [keys.join(','), ...rows.map(r => keys.map(k => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([body], { type: 'text/csv' })); a.download = name + '.csv'; a.click();
+}
+function getPos() {
+  return new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(
+    p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res({}), { timeout: 6000 }) : res({}));
+}
+
+/* ---------- generic form modal ---------- */
+function openForm(title, fields, onSave, geo) {
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = `<div><h2>${title}</h2><form>${fields.map(f => `<label>${f.label}${f.req ? ' *' : ''}
+    ${f.type === 'select' ? `<select name="${f.k}" ${f.req ? 'required' : ''}><option value="">Select…</option>${f.opts.map(o => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('')}</select>`
+      : f.type === 'textarea' ? `<textarea name="${f.k}" rows="2"></textarea>`
+      : `<input name="${f.k}" type="${f.type || 'text'}" step="any" value="${esc(f.val ?? '')}" ${f.req ? 'required' : ''}>`}</label>`).join('')}
+    <div class="row"><button type="button" class="g" id="x">Cancel</button><button class="p">Save</button></div></form></div>`;
+  document.body.appendChild(m);
+  m.querySelector('#x').onclick = () => m.remove();
+  m.querySelector('form').onsubmit = async e => {
+    e.preventDefault(); const btn = e.target.querySelector('.p'); btn.disabled = true; btn.textContent = 'Saving…';
+    const row = {}; fields.forEach(f => { const v = e.target[f.k].value; row[f.k] = f.type === 'number' ? (v === '' ? null : +v) : v; });
+    if (geo) Object.assign(row, await getPos());
+    try { await onSave(row); m.remove(); await loadAll(); render(); } catch (err) { alert('Error: ' + err.message); btn.disabled = false; btn.textContent = 'Save'; }
+  };
+}
+const clientOpts = () => S.clients.map(c => ({ v: c.id, t: c.name }));
+
+/* ---------- actions ---------- */
+const addClient = () => openForm('New client', [
+  { k: 'name', label: 'Shop / client name', req: 1 }, { k: 'owner_name', label: 'Owner name' }, { k: 'phone', label: 'Phone', type: 'tel' },
+  { k: 'address', label: 'Address / area' }, { k: 'gst', label: 'GST no.' }, { k: 'credit_limit', label: 'Credit limit (₹)', type: 'number' },
+  { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('clients', { ...r, added_by: me.name }), true);
+const addPurchase = () => openForm('Stock in (from mill)', [
+  { k: 'pur_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'mill', label: 'Mill name', req: 1 },
+  { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1 }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1 },
+  { k: 'transport_cost', label: 'Transport cost (₹)', type: 'number' }, { k: 'vehicle', label: 'Vehicle no.' },
+  { k: 'godown', label: 'Godown' }, { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('purchases', { ...r, added_by: me.name }));
+const addSale = () => openForm('New sale (outgoing)', [
+  { k: 'sale_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1 },
+  { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1 }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1 },
+  { k: 'paid_now', label: 'Paid now (₹)', type: 'number', val: 0 }, { k: 'vehicle', label: 'Vehicle no.' },
+  { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('sales', { ...r, paid_now: r.paid_now || 0, employee: me.name }), true);
+const addPayment = () => openForm('Payment received', [
+  { k: 'pay_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1 },
+  { k: 'amount', label: 'Amount (₹)', type: 'number', req: 1 },
+  { k: 'mode', label: 'Mode', type: 'select', opts: ['Cash', 'UPI', 'Bank transfer', 'Cheque'].map(x => ({ v: x, t: x })) },
+  { k: 'notes', label: 'Notes' }], r => dbInsert('payments', { ...r, received_by: me.name }), true);
+async function del(t, id) { if (!me.owner) return alert('Only the owner can delete.'); if (confirm('Delete this entry?')) { await dbDelete(t, id); await loadAll(); render(); } }
+window.del = del;
+
+/* ---------- views ---------- */
+function vDash() {
+  const pending = S.clients.reduce((a, c) => a + Math.max(balance(c.id), 0), 0);
+  const month = today().slice(0, 7);
+  const ms = S.sales.filter(s => (s.sale_date || '').startsWith(month));
+  const avgBuy = S.purchases.length ? S.purchases.reduce((a, p) => a + p.rate * p.qty, 0) / S.purchases.reduce((a, p) => a + p.qty, 0) : 0;
+  const avgSell = S.sales.length ? S.sales.reduce((a, s) => a + saleTotal(s), 0) / S.sales.reduce((a, s) => a + s.qty, 0) : 0;
+  const owing = S.clients.map(c => ({ c, b: balance(c.id) })).filter(x => x.b > 0).sort((a, b) => b.b - a.b);
+  return `<div class="grid">
+    <div class="card kpi"><small>Stock in godown</small><b>${num(stockQty())} q</b></div>
+    <div class="card kpi"><small>Total pending credit</small><b class="bad">${inr(pending)}</b></div>
+    <div class="card kpi"><small>Sales this month</small><b>${inr(ms.reduce((a, s) => a + saleTotal(s), 0))}</b></div>
+    <div class="card kpi"><small>Avg margin / quintal</small><b class="${avgSell - avgBuy >= 0 ? 'good' : 'bad'}">${S.sales.length && S.purchases.length ? inr(avgSell - avgBuy) : '—'}</b></div></div>
+    <h2>Who owes you</h2><div class="card scroll"><table><tr><th>Client</th><th>Phone</th><th>Pending</th></tr>
+    ${owing.map(x => `<tr><td>${esc(x.c.name)}</td><td>${x.c.phone ? `<a href="tel:${esc(x.c.phone)}">${esc(x.c.phone)}</a>` : ''}</td><td class="bad">${inr(x.b)}${x.c.credit_limit && x.b > x.c.credit_limit ? ' <span class="tag">over limit</span>' : ''}</td></tr>`).join('') || '<tr><td colspan=3>Nothing pending 🎉</td></tr>'}</table></div>`;
+}
+function vIn() {
+  return `<h2>Stock in (mills) <span><button class="g" onclick="csv('stock_in',S.purchases)">CSV</button> <button class="p" onclick="addPurchase()">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Date</th><th>Mill</th><th>Qty (q)</th><th>Rate</th><th>Total</th><th>Godown</th><th></th></tr>
+  ${S.purchases.map(p => `<tr><td>${esc(p.pur_date)}</td><td>${esc(p.mill)}<br><small>${esc(p.vehicle || '')}</small></td><td>${num(p.qty)}</td><td>${inr(p.rate)}</td><td>${inr(p.qty * p.rate + (p.transport_cost || 0))}</td><td>${esc(p.godown || '')}</td><td><button class="g" onclick="del('purchases','${p.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=7>No entries yet</td></tr>'}</table></div>`;
+}
+function vSales() {
+  return `<h2>Sales (outgoing) <span><button class="g" onclick="csv('sales',S.sales)">CSV</button> <button class="p" onclick="addSale()">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Date</th><th>Client</th><th>Qty</th><th>Rate</th><th>Total</th><th>Paid</th><th>By</th><th></th></tr>
+  ${S.sales.map(s => `<tr><td>${esc(s.sale_date)}</td><td>${esc(cname(s.client_id))}</td><td>${num(s.qty)}</td><td>${inr(s.rate)}</td><td>${inr(saleTotal(s))}</td><td>${inr(s.paid_now)}</td><td>${esc(s.employee || '')}<br>${map(s.lat, s.lng)}</td><td><button class="g" onclick="del('sales','${s.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=8>No sales yet</td></tr>'}</table></div>`;
+}
+function vPay() {
+  return `<h2>Payments received <span><button class="g" onclick="csv('payments',S.payments)">CSV</button> <button class="p" onclick="addPayment()">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Date</th><th>Client</th><th>Amount</th><th>Mode</th><th>By</th><th></th></tr>
+  ${S.payments.map(p => `<tr><td>${esc(p.pay_date)}</td><td>${esc(cname(p.client_id))}</td><td>${inr(p.amount)}</td><td>${esc(p.mode || '')}</td><td>${esc(p.received_by || '')}<br>${map(p.lat, p.lng)}</td><td><button class="g" onclick="del('payments','${p.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=6>No payments yet</td></tr>'}</table></div>`;
+}
+function vClients() {
+  return `<h2>Clients <span><button class="g" onclick="csv('clients',S.clients)">CSV</button> <button class="p" onclick="addClient()">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Name</th><th>Contact</th><th>Pending</th><th>Added by</th><th></th></tr>
+  ${S.clients.map(c => { const b = balance(c.id); return `<tr><td><b>${esc(c.name)}</b><br><small>${esc(c.address || '')}</small><br>${map(c.lat, c.lng)}</td>
+  <td>${esc(c.owner_name || '')}<br>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ''}<br><small>${esc(c.gst || '')}</small></td>
+  <td class="${b > 0 ? 'bad' : 'good'}">${inr(b)}<br><small>limit ${inr(c.credit_limit)}</small></td><td>${esc(c.added_by || '')}</td>
+  <td><button class="g" onclick="del('clients','${c.id}')">✕</button></td></tr>`; }).join('') || '<tr><td colspan=5>No clients yet</td></tr>'}</table></div>`;
+}
+const VIEWS = { dash: vDash, in: vIn, sales: vSales, pay: vPay, clients: vClients };
+const TABS = [['dash', '📊', 'Home'], ['in', '🏭', 'Stock in'], ['sales', '🚚', 'Sales'], ['pay', '💰', 'Payments'], ['clients', '🏪', 'Clients']];
+
+function render() {
+  $('#app').innerHTML = `<header><div><b>🍬 Sugar Trade</b><br><small>${esc(me.name)}${sb ? '' : ' · demo mode (this device only)'}</small></div>
+    <button class="g" onclick="logout()">${sb ? 'Logout' : 'Rename'}</button></header>
+    <main>${VIEWS[tab]()}</main>
+    <nav>${TABS.map(t => `<button class="${tab === t[0] ? 'on' : ''}" onclick="tab='${t[0]}';render()"><span>${t[1]}</span>${t[2]}</button>`).join('')}</nav>`;
+}
+window.render = render; window.addClient = addClient; window.addPurchase = addPurchase; window.addSale = addSale; window.addPayment = addPayment; window.csv = csv;
+window.logout = async () => { if (sb) { await sb.auth.signOut(); location.reload(); } else { localStorage.removeItem('sg_me'); boot(); } };
+
+/* ---------- boot / login ---------- */
+function loginScreen(msg) {
+  $('#app').innerHTML = `<div class="login"><h2>🍬 Sugar Trade</h2><form id="lf"><label>Email<input name="e" type="email" required></label>
+    <label>Password<input name="p" type="password" required></label><p class="bad">${esc(msg || '')}</p><div class="row"><button class="p">Login</button></div></form></div>`;
+  $('#lf').onsubmit = async e => { e.preventDefault();
+    const { error } = await sb.auth.signInWithPassword({ email: e.target.e.value, password: e.target.p.value });
+    error ? loginScreen(error.message) : boot(); };
+}
+async function boot() {
+  try {
+    if (sb) {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) return loginScreen();
+      const { data: prof } = await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+      me = { name: (prof && prof.name) || session.user.email, owner: !!prof && prof.role === 'owner' };
+    } else {
+      let n = localStorage.getItem('sg_me') || prompt('Your name?') || 'Owner'; localStorage.setItem('sg_me', n); me = { name: n, owner: true };
+    }
+    await loadAll(); render();
+  } catch (e) { $('#app').innerHTML = `<main><div class="card bad">Could not load: ${esc(e.message)}</div></main>`; }
+}
+boot();
+</script>
+</body>
+</html>
