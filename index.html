@@ -1,10 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sugar Trade Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--ink:#1c2430;--mute:#6b7685;--line:#e3e7ec;--pri:#0f766e;--bad:#c2410c;--good:#15803d}
 @media(prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--ink:#e8edf2;--mute:#8e99a8;--line:#2a323c;--pri:#2dd4bf;--bad:#fb923c;--good:#4ade80}}
@@ -14,7 +15,7 @@ header{display:flex;justify-content:space-between;align-items:center;padding:12p
 header b{font-size:17px} header small{color:var(--mute)}
 main{padding:14px 16px;max-width:980px;margin:auto}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);z-index:5}
-nav button{flex:1;border:0;background:none;color:var(--mute);padding:10px 2px;font-size:11px}
+nav button{flex:1;border:0;background:none;color:var(--mute);padding:10px 0;font-size:10.5px}
 nav button.on{color:var(--pri);font-weight:700}
 nav button span{display:block;font-size:18px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
@@ -22,33 +23,97 @@ nav button span{display:block;font-size:18px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .kpi small{color:var(--mute);display:block;font-size:12px}.kpi b{font-size:20px}
 .bad{color:var(--bad)}.good{color:var(--good)}
-h2{font-size:16px;margin:18px 0 8px;display:flex;justify-content:space-between;align-items:center}
+.sub{color:var(--mute);font-size:12px}
+h2{font-size:16px;margin:18px 0 8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 button.p{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-weight:600}
 button.g{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 10px}
+a.btn{display:block;text-align:center;text-decoration:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 10px;flex:1;font-size:13.3px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--mute);font-weight:600;font-size:12px}
 .scroll{overflow-x:auto}
+.r{text-align:right}
 input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font-size:15px;margin-top:4px}
 label{display:block;font-size:12px;color:var(--mute);margin-top:10px}
+.filters{display:flex;gap:8px;flex-wrap:wrap}.filters label{margin:0;flex:1;min-width:120px}
 .modal{position:fixed;inset:0;background:#0008;display:flex;align-items:flex-end;justify-content:center;z-index:20}
 .modal>div{background:var(--card);width:100%;max-width:520px;max-height:90vh;overflow:auto;border-radius:16px 16px 0 0;padding:16px}
 @media(min-width:700px){.modal{align-items:center}.modal>div{border-radius:16px}}
 .row{display:flex;gap:8px;margin-top:14px}.row button{flex:1}
 .login{max-width:340px;margin:12vh auto;padding:0 16px}
 .tag{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line)}
+img.slip{width:100%;border-radius:8px}
 a{color:var(--pri)}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script>
-/* ===== CONFIG: paste your Supabase keys here to go multi-user. Leave empty = demo mode (data only on this device). ===== */
-const CFG = { SUPABASE_URL: "https://mopmoncswotyrsdwttog.supabase.co", SUPABASE_ANON_KEY: "sb_publishable_i947JnaLxdCugWzh8OOlkA_1ZWQJIK8" };
-
+/* Settings live in config.js (keys + business name for bills). No keys = demo mode (data on this device only). */
+const CFG = window.APP_CONFIG || {};
+const BIZ = Object.assign({ name: 'Sugar Trade', address: '', phone: '', gst: '' }, CFG.BUSINESS || {});
 const sb = (CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY) ? supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
 const S = { clients: [], purchases: [], sales: [], payments: [] };
-let tab = 'dash', me = { name: '', owner: true };
+let tab = 'dash', stmt = null, me = { name: '', owner: true };
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2));
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const inr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+const num = n => (Math.round((n || 0) * 100) / 100).toLocaleString('en-IN');
+const today = () => new Date().toISOString().slice(0, 10);
+const cname = id => (S.clients.find(c => c.id === id) || {}).name || '—';
+const saleTotal = s => s.qty * s.rate;
+const balance = id => S.sales.filter(s => s.client_id === id).reduce((a, s) => a + saleTotal(s) - (s.paid_now || 0), 0)
+  - S.payments.filter(p => p.client_id === id).reduce((a, p) => a + p.amount, 0);
+const stockQty = () => S.purchases.reduce((a, p) => a + p.qty, 0) - S.sales.reduce((a, s) => a + s.qty, 0);
+const GD = g => g || 'Unassigned';
+function stockByGodown() {
+  const m = {};
+  S.purchases.forEach(p => { m[GD(p.godown)] = (m[GD(p.godown)] || 0) + p.qty; });
+  S.sales.forEach(s => { m[GD(s.godown)] = (m[GD(s.godown)] || 0) - s.qty; });
+  return m;
+}
+const godowns = () => [...new Set([...S.purchases, ...S.sales].map(x => x.godown).filter(Boolean))];
+const mapLink = (lat, lng) => lat && lng ? `<a target="_blank" href="https://maps.google.com/?q=${lat},${lng}">📍 map</a>` : '';
+function nextBill() {
+  const n = Math.max(0, ...S.sales.map(s => +((s.bill_no || '').match(/(\d+)$/) || [])[1] || 0)) + 1;
+  return 'INV-' + String(n).padStart(4, '0');
+}
+function csv(name, rows) {
+  if (!rows.length) return alert('Nothing to export');
+  const keys = Object.keys(rows[0]);
+  const body = [keys.join(','), ...rows.map(r => keys.map(k => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + body], { type: 'text/csv' })); a.download = name + '.csv'; a.click();
+}
+function getPos() {
+  return new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(
+    p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res({}), { timeout: 6000 }) : res({}));
+}
+function waLink(c, amt) {
+  let p = String(c.phone || '').replace(/\D/g, '');
+  if (p.length === 10) p = '91' + p; else if (p.length === 11 && p[0] === '0') p = '91' + p.slice(1);
+  if (!p) return '';
+  const msg = `Hello ${c.owner_name || c.name}, this is a gentle reminder from ${BIZ.name}: ${inr(amt)} is pending on your account. Please arrange the payment at your earliest convenience. Thank you!`;
+  return 'https://wa.me/' + p + '?text=' + encodeURIComponent(msg);
+}
+function modal(inner) {
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = `<div>${inner}<div class="row"><button class="g" id="x">Close</button></div></div>`;
+  document.body.appendChild(m);
+  m.querySelector('#x').onclick = () => m.remove();
+  m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+  return m;
+}
+function printDoc(title, body) {
+  const w = window.open('', '_blank');
+  if (!w) return alert('Please allow pop-ups to print.');
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#000}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}h1,h2{margin:4px 0}.r{text-align:right}.big{font-size:16px;font-weight:bold}.sig{margin-top:60px;display:flex;justify-content:space-between}</style></head><body>'
+    + body + '<scr' + 'ipt>window.onload=function(){window.print()}</scr' + 'ipt></body></html>');
+  w.document.close();
+}
+const bizHead = () => `<h1>${esc(BIZ.name)}</h1><div>${esc(BIZ.address)}${BIZ.phone ? '<br>Ph: ' + esc(BIZ.phone) : ''}${BIZ.gst ? ' · GSTIN: ' + esc(BIZ.gst) : ''}</div><hr>`;
 
 /* ---------- storage adapter ---------- */
 const lsGet = t => JSON.parse(localStorage.getItem('sg_' + t) || '[]');
@@ -59,137 +124,284 @@ async function dbList(t) {
 }
 async function dbInsert(t, row) {
   if (sb) { const { error } = await sb.from(t).insert(row); if (error) throw error; return; }
-  const a = lsGet(t); a.unshift({ ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() }); lsSet(t, a);
+  const a = lsGet(t); a.unshift({ ...row, id: uid(), created_at: new Date().toISOString() }); lsSet(t, a);
+}
+async function dbUpdate(t, id, row) {
+  if (sb) {
+    const { data, error } = await sb.from(t).update(row).eq('id', id).select();
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Not allowed (only the owner can edit) or entry not found');
+    return;
+  }
+  lsSet(t, lsGet(t).map(r => r.id === id ? { ...r, ...row } : r));
 }
 async function dbDelete(t, id) {
-  if (sb) { const { error } = await sb.from(t).delete().eq('id', id); if (error) throw error; return; }
+  if (sb) {
+    const { data, error } = await sb.from(t).delete().eq('id', id).select();
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Not allowed (only the owner can delete) or entry not found');
+    return;
+  }
   lsSet(t, lsGet(t).filter(r => r.id !== id));
 }
 async function loadAll() { for (const t of Object.keys(S)) S[t] = await dbList(t); }
 
-/* ---------- helpers ---------- */
-const $ = s => document.querySelector(s);
-const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const inr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
-const num = n => (Math.round((n || 0) * 100) / 100).toLocaleString('en-IN');
-const today = () => new Date().toISOString().slice(0, 10);
-const cname = id => (S.clients.find(c => c.id === id) || {}).name || '—';
-const saleTotal = s => s.qty * s.rate;
-const balance = id => S.sales.filter(s => s.client_id === id).reduce((a, s) => a + saleTotal(s) - (s.paid_now || 0), 0)
-  - S.payments.filter(p => p.client_id === id).reduce((a, p) => a + p.amount, 0);
-const stockQty = () => S.purchases.reduce((a, p) => a + p.qty, 0) - S.sales.reduce((a, s) => a + s.qty, 0);
-const map = (lat, lng) => lat && lng ? `<a target="_blank" href="https://maps.google.com/?q=${lat},${lng}">📍 map</a>` : '';
-function csv(name, rows) {
-  if (!rows.length) return alert('Nothing to export');
-  const keys = Object.keys(rows[0]);
-  const body = [keys.join(','), ...rows.map(r => keys.map(k => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([body], { type: 'text/csv' })); a.download = name + '.csv'; a.click();
+/* ---------- photos ---------- */
+function compress(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      c.toBlob(b => b ? res(b) : rej(new Error('Could not read photo')), 'image/jpeg', 0.7);
+    };
+    img.onerror = () => rej(new Error('That file is not a valid image'));
+    img.src = url;
+  });
 }
-function getPos() {
-  return new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(
-    p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res({}), { timeout: 6000 }) : res({}));
+async function savePhoto(table, file) {
+  const blob = await compress(file);
+  if (sb) {
+    const path = `${table}/${uid()}.jpg`;
+    const { error } = await sb.storage.from('slips').upload(path, blob, { contentType: 'image/jpeg' });
+    if (error) throw error;
+    return path;
+  }
+  return new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+}
+async function showPhoto(t, id) {
+  const r = S[t].find(x => x.id === id); if (!r || !r.photo_path) return;
+  let src = r.photo_path;
+  if (sb) { const { data, error } = await sb.storage.from('slips').createSignedUrl(r.photo_path, 3600); if (error) return alert(error.message); src = data.signedUrl; }
+  modal(`<img class="slip" src="${esc(src)}" alt="photo">`);
 }
 
-/* ---------- generic form modal ---------- */
-function openForm(title, fields, onSave, geo) {
+/* ---------- forms ---------- */
+function openForm(title, fields, onSave, o = {}) {
   const m = document.createElement('div'); m.className = 'modal';
-  m.innerHTML = `<div><h2>${title}</h2><form>${fields.map(f => `<label>${f.label}${f.req ? ' *' : ''}
-    ${f.type === 'select' ? `<select name="${f.k}" ${f.req ? 'required' : ''}><option value="">Select…</option>${f.opts.map(o => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('')}</select>`
-      : f.type === 'textarea' ? `<textarea name="${f.k}" rows="2"></textarea>`
-      : `<input name="${f.k}" type="${f.type || 'text'}" step="any" value="${esc(f.val ?? '')}" ${f.req ? 'required' : ''}>`}</label>`).join('')}
+  const inp = f => {
+    const req = f.req ? 'required' : '';
+    if (f.type === 'select') return `<select name="${f.k}" ${req}><option value="">Select…</option>${f.opts.map(x => `<option value="${esc(x.v)}" ${String(x.v) === String(f.val ?? '') ? 'selected' : ''}>${esc(x.t)}</option>`).join('')}</select>`;
+    if (f.type === 'textarea') return `<textarea name="${f.k}" rows="2">${esc(f.val ?? '')}</textarea>`;
+    if (f.type === 'file') return `<input name="${f.k}" type="file" accept="image/*">${f.val ? '<small class="sub">A photo is attached already. Choose a new one to replace it.</small>' : ''}`;
+    return `<input name="${f.k}" type="${f.type || 'text'}" step="any" value="${esc(f.val ?? '')}" ${f.list ? `list="dl_${f.k}"` : ''} ${req}>`
+      + (f.list ? `<datalist id="dl_${f.k}">${f.list.map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : '');
+  };
+  m.innerHTML = `<div><h2>${esc(title)}</h2><form>${fields.map(f => `<label>${f.label}${f.req ? ' *' : ''}${inp(f)}</label>`).join('')}
     <div class="row"><button type="button" class="g" id="x">Cancel</button><button class="p">Save</button></div></form></div>`;
   document.body.appendChild(m);
   m.querySelector('#x').onclick = () => m.remove();
   m.querySelector('form').onsubmit = async e => {
     e.preventDefault(); const btn = e.target.querySelector('.p'); btn.disabled = true; btn.textContent = 'Saving…';
-    const row = {}; fields.forEach(f => { const v = e.target[f.k].value; row[f.k] = f.type === 'number' ? (v === '' ? null : +v) : v; });
-    if (geo) Object.assign(row, await getPos());
-    try { await onSave(row); m.remove(); await loadAll(); render(); } catch (err) { alert('Error: ' + err.message); btn.disabled = false; btn.textContent = 'Save'; }
+    try {
+      const row = {};
+      for (const f of fields) {
+        const el = e.target.elements[f.k];
+        if (f.type === 'file') { if (el.files[0]) row[f.k] = await savePhoto(o.table, el.files[0]); continue; }
+        const v = el.value; row[f.k] = f.type === 'number' ? (v === '' ? null : +v) : v;
+      }
+      if (o.geo) Object.assign(row, await getPos());
+      await onSave(row); m.remove(); await loadAll(); render();
+    } catch (err) {
+      alert('Error: ' + (String(err.message).includes('sales_bill_no_key') ? 'This bill number is already used.' : err.message));
+      btn.disabled = false; btn.textContent = 'Save';
+    }
   };
 }
-const clientOpts = () => S.clients.map(c => ({ v: c.id, t: c.name }));
+const clientOpts = () => S.clients.map(c => { const b = balance(c.id); return { v: c.id, t: c.name + (b > 0 ? ' — pending ' + inr(b) : '') }; });
+const FIELDS = {
+  clients: r => [
+    { k: 'name', label: 'Shop / client name', req: 1, val: r.name }, { k: 'owner_name', label: 'Owner name', val: r.owner_name },
+    { k: 'phone', label: 'Phone (10 digits)', type: 'tel', val: r.phone }, { k: 'address', label: 'Address / area', val: r.address },
+    { k: 'gst', label: 'GST no.', val: r.gst }, { k: 'credit_limit', label: 'Credit limit (₹)', type: 'number', val: r.credit_limit },
+    { k: 'notes', label: 'Notes', type: 'textarea', val: r.notes }],
+  purchases: r => [
+    { k: 'pur_date', label: 'Date', type: 'date', req: 1, val: r.pur_date || today() }, { k: 'mill', label: 'Mill name', req: 1, val: r.mill },
+    { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1, val: r.qty }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1, val: r.rate },
+    { k: 'transport_cost', label: 'Transport cost (₹)', type: 'number', val: r.transport_cost }, { k: 'vehicle', label: 'Vehicle no.', val: r.vehicle },
+    { k: 'godown', label: 'Godown (type or pick)', list: godowns(), val: r.godown }, { k: 'notes', label: 'Notes', type: 'textarea', val: r.notes }],
+  sales: r => [
+    { k: 'sale_date', label: 'Date', type: 'date', req: 1, val: r.sale_date || today() }, { k: 'bill_no', label: 'Bill no.', val: r.bill_no ?? nextBill() },
+    { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1, val: r.client_id },
+    { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1, val: r.qty }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1, val: r.rate },
+    { k: 'paid_now', label: 'Paid now (₹)', type: 'number', val: r.paid_now ?? 0 },
+    { k: 'godown', label: 'Taken from godown', list: godowns(), val: r.godown }, { k: 'vehicle', label: 'Vehicle no.', val: r.vehicle },
+    { k: 'notes', label: 'Notes', type: 'textarea', val: r.notes }, { k: 'photo_path', label: 'Photo of delivery slip (optional)', type: 'file', val: r.photo_path }],
+  payments: r => [
+    { k: 'pay_date', label: 'Date', type: 'date', req: 1, val: r.pay_date || today() },
+    { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1, val: r.client_id },
+    { k: 'amount', label: 'Amount (₹)', type: 'number', req: 1, val: r.amount },
+    { k: 'mode', label: 'Mode', type: 'select', opts: ['Cash', 'UPI', 'Bank transfer', 'Cheque'].map(x => ({ v: x, t: x })), val: r.mode },
+    { k: 'notes', label: 'Notes', val: r.notes }, { k: 'photo_path', label: 'Photo of cheque / receipt (optional)', type: 'file', val: r.photo_path }]
+};
+const LABEL = { clients: 'client', purchases: 'stock-in entry', sales: 'sale', payments: 'payment' };
+const BYCOL = { clients: 'added_by', purchases: 'added_by', sales: 'employee', payments: 'received_by' };
+function openRec(t, id) {
+  const rec = id ? S[t].find(x => x.id === id) : null;
+  openForm((rec ? 'Edit ' : 'New ') + LABEL[t], FIELDS[t](rec || {}), async row => {
+    if (t === 'sales') {
+      row.paid_now = row.paid_now || 0;
+      if (row.qty > stockQty() + (rec ? rec.qty : 0) && !confirm('This is more than the stock you have recorded. Save anyway?')) throw new Error('Cancelled');
+    }
+    if (rec) await dbUpdate(t, id, row); else await dbInsert(t, { ...row, [BYCOL[t]]: me.name });
+  }, { geo: !rec && t !== 'purchases', table: t });
+}
+async function del(t, id) {
+  if (!me.owner) return alert('Only the owner can delete.');
+  if (!confirm('Delete this entry?')) return;
+  try { await dbDelete(t, id); await loadAll(); render(); } catch (e) { alert('Error: ' + e.message); }
+}
+const act = (t, id, extra = '') => extra + (me.owner ? `<button class="g" onclick="openRec('${t}','${id}')">✎</button> <button class="g" onclick="del('${t}','${id}')">✕</button>` : '');
+const photoBtn = (t, r) => r.photo_path ? `<button class="g" onclick="showPhoto('${t}','${r.id}')">📷</button> ` : '';
 
-/* ---------- actions ---------- */
-const addClient = () => openForm('New client', [
-  { k: 'name', label: 'Shop / client name', req: 1 }, { k: 'owner_name', label: 'Owner name' }, { k: 'phone', label: 'Phone', type: 'tel' },
-  { k: 'address', label: 'Address / area' }, { k: 'gst', label: 'GST no.' }, { k: 'credit_limit', label: 'Credit limit (₹)', type: 'number' },
-  { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('clients', { ...r, added_by: me.name }), true);
-const addPurchase = () => openForm('Stock in (from mill)', [
-  { k: 'pur_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'mill', label: 'Mill name', req: 1 },
-  { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1 }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1 },
-  { k: 'transport_cost', label: 'Transport cost (₹)', type: 'number' }, { k: 'vehicle', label: 'Vehicle no.' },
-  { k: 'godown', label: 'Godown' }, { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('purchases', { ...r, added_by: me.name }));
-const addSale = () => openForm('New sale (outgoing)', [
-  { k: 'sale_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1 },
-  { k: 'qty', label: 'Quantity (quintal)', type: 'number', req: 1 }, { k: 'rate', label: 'Rate per quintal (₹)', type: 'number', req: 1 },
-  { k: 'paid_now', label: 'Paid now (₹)', type: 'number', val: 0 }, { k: 'vehicle', label: 'Vehicle no.' },
-  { k: 'notes', label: 'Notes', type: 'textarea' }], r => dbInsert('sales', { ...r, paid_now: r.paid_now || 0, employee: me.name }), true);
-const addPayment = () => openForm('Payment received', [
-  { k: 'pay_date', label: 'Date', type: 'date', val: today(), req: 1 }, { k: 'client_id', label: 'Client', type: 'select', opts: clientOpts(), req: 1 },
-  { k: 'amount', label: 'Amount (₹)', type: 'number', req: 1 },
-  { k: 'mode', label: 'Mode', type: 'select', opts: ['Cash', 'UPI', 'Bank transfer', 'Cheque'].map(x => ({ v: x, t: x })) },
-  { k: 'notes', label: 'Notes' }], r => dbInsert('payments', { ...r, received_by: me.name }), true);
-async function del(t, id) { if (!me.owner) return alert('Only the owner can delete.'); if (confirm('Delete this entry?')) { await dbDelete(t, id); await loadAll(); render(); } }
-window.del = del;
+/* ---------- bills and statements ---------- */
+function printBill(id) {
+  const s = S.sales.find(x => x.id === id); if (!s) return;
+  const c = S.clients.find(x => x.id === s.client_id) || {};
+  printDoc('Bill ' + (s.bill_no || ''), bizHead() + `<h2>Bill / Invoice</h2>
+  <table><tr><td>Bill no.</td><td>${esc(s.bill_no || '—')}</td><td>Date</td><td>${esc(s.sale_date)}</td></tr>
+  <tr><td>Billed to</td><td colspan="3">${esc(c.name)}<br>${esc(c.address || '')}${c.phone ? '<br>Ph: ' + esc(c.phone) : ''}${c.gst ? ' · GSTIN: ' + esc(c.gst) : ''}</td></tr></table>
+  <table><tr><th>Item</th><th class="r">Qty (quintal)</th><th class="r">Rate</th><th class="r">Amount</th></tr>
+  <tr><td>Sugar</td><td class="r">${num(s.qty)}</td><td class="r">${inr(s.rate)}</td><td class="r">${inr(saleTotal(s))}</td></tr></table>
+  <table><tr><td>Paid now</td><td class="r">${inr(s.paid_now)}</td></tr>
+  <tr><td>Balance on this bill</td><td class="r">${inr(saleTotal(s) - (s.paid_now || 0))}</td></tr>
+  <tr><td class="big">Total outstanding (as of today)</td><td class="r big">${inr(balance(s.client_id))}</td></tr></table>
+  ${s.vehicle ? 'Vehicle: ' + esc(s.vehicle) : ''}<div class="sig"><div>Customer signature</div><div>For ${esc(BIZ.name)}</div></div>`);
+}
+function stmtRows(c) {
+  const ev = [];
+  S.sales.filter(s => s.client_id === c.id).forEach(s => ev.push({ d: s.sale_date, t: s.created_at, desc: `Sale ${s.bill_no || ''} · ${num(s.qty)} q @ ${inr(s.rate)}`, debit: saleTotal(s), credit: s.paid_now || 0 }));
+  S.payments.filter(p => p.client_id === c.id).forEach(p => ev.push({ d: p.pay_date, t: p.created_at, desc: `Payment${p.mode ? ' (' + p.mode + ')' : ''}`, debit: 0, credit: p.amount }));
+  ev.sort((a, b) => (a.d || '').localeCompare(b.d || '') || (a.t || '').localeCompare(b.t || ''));
+  let bal = 0; ev.forEach(e => { bal += e.debit - e.credit; e.bal = bal; });
+  return ev;
+}
+function printStmt(id) {
+  const c = S.clients.find(x => x.id === id); if (!c) return;
+  printDoc('Statement ' + c.name, bizHead() + `<h2>Account statement</h2><div><b>${esc(c.name)}</b><br>${esc(c.address || '')}${c.phone ? '<br>Ph: ' + esc(c.phone) : ''}</div>
+  <table><tr><th>Date</th><th>Details</th><th class="r">Billed</th><th class="r">Received</th><th class="r">Balance</th></tr>
+  ${stmtRows(c).map(e => `<tr><td>${esc(e.d)}</td><td>${esc(e.desc)}</td><td class="r">${e.debit ? inr(e.debit) : ''}</td><td class="r">${e.credit ? inr(e.credit) : ''}</td><td class="r">${inr(e.bal)}</td></tr>`).join('')}</table>
+  <div class="big">Amount due: ${inr(balance(c.id))}</div><div class="sub">Printed on ${esc(today())}</div>`);
+}
+function csvStmt(id) {
+  const c = S.clients.find(x => x.id === id); if (!c) return;
+  csv('statement_' + c.name.replace(/\W+/g, '_'), stmtRows(c).map(e => ({ Date: e.d, Details: e.desc, Billed: e.debit, Received: e.credit, Balance: e.bal })));
+}
+function openStmt(id) { stmt = id; tab = 'clients'; render(); window.scrollTo(0, 0); }
+
+/* ---------- reports ---------- */
+let rep = { from: today().slice(0, 8) + '01', to: today(), by: 'employee' };
+const REPLAB = { employee: 'Employee', day: 'Day', month: 'Month', client: 'Client' };
+function reportRows() {
+  const inR = d => d && d >= rep.from && d <= rep.to;
+  const key = {
+    employee: [s => s.employee || '—', p => p.received_by || '—'], day: [s => s.sale_date, p => p.pay_date],
+    month: [s => (s.sale_date || '').slice(0, 7), p => (p.pay_date || '').slice(0, 7)], client: [s => cname(s.client_id), p => cname(p.client_id)]
+  }[rep.by];
+  const m = {};
+  const row = k => m[k] || (m[k] = { name: k, bills: 0, qty: 0, sales: 0, collected: 0 });
+  S.sales.filter(s => inR(s.sale_date)).forEach(s => { const r = row(key[0](s)); r.bills++; r.qty += s.qty; r.sales += saleTotal(s); r.collected += s.paid_now || 0; });
+  S.payments.filter(p => inR(p.pay_date)).forEach(p => { row(key[1](p)).collected += p.amount; });
+  return Object.values(m).sort((a, b) => (rep.by === 'day' || rep.by === 'month') ? b.name.localeCompare(a.name) : b.sales - a.sales);
+}
+function csvRep() {
+  const lab = REPLAB[rep.by];
+  csv('report_' + rep.by, reportRows().map(r => ({ [lab]: r.name, Bills: r.bills, Quintals: r.qty, Sales: r.sales, Collected: r.collected })));
+}
 
 /* ---------- views ---------- */
 function vDash() {
   const pending = S.clients.reduce((a, c) => a + Math.max(balance(c.id), 0), 0);
   const month = today().slice(0, 7);
   const ms = S.sales.filter(s => (s.sale_date || '').startsWith(month));
-  const avgBuy = S.purchases.length ? S.purchases.reduce((a, p) => a + p.rate * p.qty, 0) / S.purchases.reduce((a, p) => a + p.qty, 0) : 0;
-  const avgSell = S.sales.length ? S.sales.reduce((a, s) => a + saleTotal(s), 0) / S.sales.reduce((a, s) => a + s.qty, 0) : 0;
+  const buyQ = S.purchases.reduce((a, p) => a + p.qty, 0), sellQ = S.sales.reduce((a, s) => a + s.qty, 0);
+  const avgBuy = buyQ ? S.purchases.reduce((a, p) => a + p.rate * p.qty, 0) / buyQ : 0;
+  const avgSell = sellQ ? S.sales.reduce((a, s) => a + saleTotal(s), 0) / sellQ : 0;
   const owing = S.clients.map(c => ({ c, b: balance(c.id) })).filter(x => x.b > 0).sort((a, b) => b.b - a.b);
+  const gs = Object.entries(stockByGodown());
   return `<div class="grid">
-    <div class="card kpi"><small>Stock in godown</small><b>${num(stockQty())} q</b></div>
+    <div class="card kpi"><small>Stock in godowns</small><b>${num(stockQty())} q</b></div>
     <div class="card kpi"><small>Total pending credit</small><b class="bad">${inr(pending)}</b></div>
     <div class="card kpi"><small>Sales this month</small><b>${inr(ms.reduce((a, s) => a + saleTotal(s), 0))}</b></div>
-    <div class="card kpi"><small>Avg margin / quintal</small><b class="${avgSell - avgBuy >= 0 ? 'good' : 'bad'}">${S.sales.length && S.purchases.length ? inr(avgSell - avgBuy) : '—'}</b></div></div>
-    <h2>Who owes you</h2><div class="card scroll"><table><tr><th>Client</th><th>Phone</th><th>Pending</th></tr>
-    ${owing.map(x => `<tr><td>${esc(x.c.name)}</td><td>${x.c.phone ? `<a href="tel:${esc(x.c.phone)}">${esc(x.c.phone)}</a>` : ''}</td><td class="bad">${inr(x.b)}${x.c.credit_limit && x.b > x.c.credit_limit ? ' <span class="tag">over limit</span>' : ''}</td></tr>`).join('') || '<tr><td colspan=3>Nothing pending 🎉</td></tr>'}</table></div>`;
+    <div class="card kpi"><small>Avg margin / quintal</small><b class="${avgSell - avgBuy >= 0 ? 'good' : 'bad'}">${sellQ && buyQ ? inr(avgSell - avgBuy) : '—'}</b></div></div>
+    <h2>Stock by godown</h2><div class="card scroll"><table><tr><th>Godown</th><th class="r">Quintal</th></tr>
+    ${gs.map(([g, q]) => `<tr><td>${esc(g)}</td><td class="r ${q < 0 ? 'bad' : ''}">${num(q)}</td></tr>`).join('') || '<tr><td colspan="2">No stock yet</td></tr>'}</table>
+    <div class="sub" style="margin-top:6px">Sales with no godown chosen are counted under "Unassigned".</div></div>
+    <h2>Who owes you</h2><div class="card scroll"><table><tr><th>Client</th><th>Pending</th><th></th></tr>
+    ${owing.map(x => { const w = waLink(x.c, x.b); return `<tr><td><a href="#" onclick="openStmt('${x.c.id}');return false">${esc(x.c.name)}</a><br>${x.c.phone ? `<a href="tel:${esc(x.c.phone)}">${esc(x.c.phone)}</a>` : ''}</td>
+    <td class="bad">${inr(x.b)}${x.c.credit_limit && x.b > x.c.credit_limit ? ' <span class="tag">over limit</span>' : ''}</td>
+    <td>${w ? `<a target="_blank" href="${esc(w)}">💬 Remind</a>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="3">Nothing pending 🎉</td></tr>'}</table></div>`;
 }
 function vIn() {
-  return `<h2>Stock in (mills) <span><button class="g" onclick="csv('stock_in',S.purchases)">CSV</button> <button class="p" onclick="addPurchase()">+ Add</button></span></h2>
+  return `<h2>Stock in (mills) <span><button class="g" onclick="csv('stock_in',S.purchases)">CSV</button> <button class="p" onclick="openRec('purchases')">+ Add</button></span></h2>
   <div class="card scroll"><table><tr><th>Date</th><th>Mill</th><th>Qty (q)</th><th>Rate</th><th>Total</th><th>Godown</th><th></th></tr>
-  ${S.purchases.map(p => `<tr><td>${esc(p.pur_date)}</td><td>${esc(p.mill)}<br><small>${esc(p.vehicle || '')}</small></td><td>${num(p.qty)}</td><td>${inr(p.rate)}</td><td>${inr(p.qty * p.rate + (p.transport_cost || 0))}</td><td>${esc(p.godown || '')}</td><td><button class="g" onclick="del('purchases','${p.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=7>No entries yet</td></tr>'}</table></div>`;
+  ${S.purchases.map(p => `<tr><td>${esc(p.pur_date)}</td><td>${esc(p.mill)}<br><small>${esc(p.vehicle || '')}</small></td><td>${num(p.qty)}</td><td>${inr(p.rate)}</td><td>${inr(p.qty * p.rate + (p.transport_cost || 0))}</td><td>${esc(p.godown || '')}</td><td>${act('purchases', p.id)}</td></tr>`).join('') || '<tr><td colspan="7">No entries yet</td></tr>'}</table></div>`;
 }
 function vSales() {
-  return `<h2>Sales (outgoing) <span><button class="g" onclick="csv('sales',S.sales)">CSV</button> <button class="p" onclick="addSale()">+ Add</button></span></h2>
-  <div class="card scroll"><table><tr><th>Date</th><th>Client</th><th>Qty</th><th>Rate</th><th>Total</th><th>Paid</th><th>By</th><th></th></tr>
-  ${S.sales.map(s => `<tr><td>${esc(s.sale_date)}</td><td>${esc(cname(s.client_id))}</td><td>${num(s.qty)}</td><td>${inr(s.rate)}</td><td>${inr(saleTotal(s))}</td><td>${inr(s.paid_now)}</td><td>${esc(s.employee || '')}<br>${map(s.lat, s.lng)}</td><td><button class="g" onclick="del('sales','${s.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=8>No sales yet</td></tr>'}</table></div>`;
+  return `<h2>Sales (outgoing) <span><button class="g" onclick="csv('sales',S.sales)">CSV</button> <button class="p" onclick="openRec('sales')">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Date / Bill</th><th>Client</th><th>Qty × Rate</th><th>Total / Paid</th><th>By</th><th></th></tr>
+  ${S.sales.map(s => `<tr><td>${esc(s.sale_date)}<br><small>${esc(s.bill_no || '')}</small></td><td>${esc(cname(s.client_id))}<br><small>${esc(s.godown || '')}</small></td>
+  <td>${num(s.qty)} q × ${inr(s.rate)}</td><td>${inr(saleTotal(s))}<br><small>paid ${inr(s.paid_now)}</small></td>
+  <td>${esc(s.employee || '')}<br>${mapLink(s.lat, s.lng)}</td><td>${photoBtn('sales', s)}${act('sales', s.id, `<button class="g" onclick="printBill('${s.id}')">🖨</button> `)}</td></tr>`).join('') || '<tr><td colspan="6">No sales yet</td></tr>'}</table></div>`;
 }
 function vPay() {
-  return `<h2>Payments received <span><button class="g" onclick="csv('payments',S.payments)">CSV</button> <button class="p" onclick="addPayment()">+ Add</button></span></h2>
+  return `<h2>Payments received <span><button class="g" onclick="csv('payments',S.payments)">CSV</button> <button class="p" onclick="openRec('payments')">+ Add</button></span></h2>
   <div class="card scroll"><table><tr><th>Date</th><th>Client</th><th>Amount</th><th>Mode</th><th>By</th><th></th></tr>
-  ${S.payments.map(p => `<tr><td>${esc(p.pay_date)}</td><td>${esc(cname(p.client_id))}</td><td>${inr(p.amount)}</td><td>${esc(p.mode || '')}</td><td>${esc(p.received_by || '')}<br>${map(p.lat, p.lng)}</td><td><button class="g" onclick="del('payments','${p.id}')">✕</button></td></tr>`).join('') || '<tr><td colspan=6>No payments yet</td></tr>'}</table></div>`;
+  ${S.payments.map(p => `<tr><td>${esc(p.pay_date)}</td><td>${esc(cname(p.client_id))}</td><td>${inr(p.amount)}</td><td>${esc(p.mode || '')}</td><td>${esc(p.received_by || '')}<br>${mapLink(p.lat, p.lng)}</td><td>${photoBtn('payments', p)}${act('payments', p.id)}</td></tr>`).join('') || '<tr><td colspan="6">No payments yet</td></tr>'}</table></div>`;
 }
 function vClients() {
-  return `<h2>Clients <span><button class="g" onclick="csv('clients',S.clients)">CSV</button> <button class="p" onclick="addClient()">+ Add</button></span></h2>
-  <div class="card scroll"><table><tr><th>Name</th><th>Contact</th><th>Pending</th><th>Added by</th><th></th></tr>
-  ${S.clients.map(c => { const b = balance(c.id); return `<tr><td><b>${esc(c.name)}</b><br><small>${esc(c.address || '')}</small><br>${map(c.lat, c.lng)}</td>
+  if (stmt) return vStatement();
+  return `<h2>Clients <span><button class="g" onclick="csv('clients',S.clients)">CSV</button> <button class="p" onclick="openRec('clients')">+ Add</button></span></h2>
+  <div class="card scroll"><table><tr><th>Name</th><th>Contact</th><th>Pending</th><th></th></tr>
+  ${S.clients.map(c => { const b = balance(c.id), w = b > 0 ? waLink(c, b) : ''; return `<tr><td><b><a href="#" onclick="openStmt('${c.id}');return false">${esc(c.name)}</a></b><br><small>${esc(c.address || '')}</small><br>${mapLink(c.lat, c.lng)}<br><small>added by ${esc(c.added_by || '')}</small></td>
   <td>${esc(c.owner_name || '')}<br>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ''}<br><small>${esc(c.gst || '')}</small></td>
-  <td class="${b > 0 ? 'bad' : 'good'}">${inr(b)}<br><small>limit ${inr(c.credit_limit)}</small></td><td>${esc(c.added_by || '')}</td>
-  <td><button class="g" onclick="del('clients','${c.id}')">✕</button></td></tr>`; }).join('') || '<tr><td colspan=5>No clients yet</td></tr>'}</table></div>`;
+  <td class="${b > 0 ? 'bad' : 'good'}">${inr(b)}<br><small>limit ${inr(c.credit_limit)}</small></td>
+  <td>${w ? `<a target="_blank" href="${esc(w)}">💬</a> ` : ''}${act('clients', c.id)}</td></tr>`; }).join('') || '<tr><td colspan="4">No clients yet</td></tr>'}</table></div>`;
 }
-const VIEWS = { dash: vDash, in: vIn, sales: vSales, pay: vPay, clients: vClients };
-const TABS = [['dash', '📊', 'Home'], ['in', '🏭', 'Stock in'], ['sales', '🚚', 'Sales'], ['pay', '💰', 'Payments'], ['clients', '🏪', 'Clients']];
+function vStatement() {
+  const c = S.clients.find(x => x.id === stmt);
+  if (!c) { stmt = null; return vClients(); }
+  const ev = stmtRows(c), bal = balance(c.id), w = bal > 0 ? waLink(c, bal) : '';
+  return `<h2>${esc(c.name)} <span><button class="g" onclick="stmt=null;render()">← Back</button></span></h2>
+  <div class="card"><div class="sub">${esc(c.address || '')} ${c.phone ? '· ' + esc(c.phone) : ''}</div>
+  <div class="kpi" style="margin-top:8px"><small>Outstanding</small><b class="${bal > 0 ? 'bad' : 'good'}">${inr(bal)}</b></div>
+  <div class="row"><button class="g" onclick="printStmt('${c.id}')">🖨 Print</button><button class="g" onclick="csvStmt('${c.id}')">CSV</button>${w ? `<a class="btn" target="_blank" href="${esc(w)}">💬 WhatsApp</a>` : ''}</div></div>
+  <div class="card scroll" style="margin-top:10px"><table><tr><th>Date</th><th>Details</th><th class="r">Billed</th><th class="r">Received</th><th class="r">Balance</th></tr>
+  ${ev.map(e => `<tr><td>${esc(e.d)}</td><td>${esc(e.desc)}</td><td class="r">${e.debit ? inr(e.debit) : ''}</td><td class="r">${e.credit ? inr(e.credit) : ''}</td><td class="r">${inr(e.bal)}</td></tr>`).join('') || '<tr><td colspan="5">No transactions yet</td></tr>'}</table></div>`;
+}
+function vRep() {
+  const rows = reportRows();
+  const t = rows.reduce((a, r) => ({ bills: a.bills + r.bills, qty: a.qty + r.qty, sales: a.sales + r.sales, collected: a.collected + r.collected }), { bills: 0, qty: 0, sales: 0, collected: 0 });
+  return `<h2>Reports <span><button class="g" onclick="csvRep()">CSV</button></span></h2>
+  <div class="card filters"><label>From<input type="date" value="${esc(rep.from)}" onchange="rep.from=this.value;render()"></label>
+  <label>To<input type="date" value="${esc(rep.to)}" onchange="rep.to=this.value;render()"></label>
+  <label>Group by<select onchange="rep.by=this.value;render()">${Object.entries(REPLAB).map(([k, v]) => `<option value="${k}" ${rep.by === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>
+  <div class="card scroll" style="margin-top:10px"><table><tr><th>${REPLAB[rep.by]}</th><th class="r">Bills</th><th class="r">Qty (q)</th><th class="r">Sales</th><th class="r">Collected</th></tr>
+  ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="r">${r.bills}</td><td class="r">${num(r.qty)}</td><td class="r">${inr(r.sales)}</td><td class="r">${inr(r.collected)}</td></tr>`).join('') || '<tr><td colspan="5">No data in this period</td></tr>'}
+  <tr><td><b>Total</b></td><td class="r"><b>${t.bills}</b></td><td class="r"><b>${num(t.qty)}</b></td><td class="r"><b>${inr(t.sales)}</b></td><td class="r"><b>${inr(t.collected)}</b></td></tr></table></div>
+  <p class="sub">Collected = paid at the time of sale + payments received in this period.</p>`;
+}
+const VIEWS = { dash: vDash, in: vIn, sales: vSales, pay: vPay, clients: vClients, rep: vRep };
+const TABS = [['dash', '📊', 'Home'], ['in', '🏭', 'Stock in'], ['sales', '🚚', 'Sales'], ['pay', '💰', 'Payments'], ['clients', '🏪', 'Clients'], ['rep', '📈', 'Reports']];
 
 function render() {
-  $('#app').innerHTML = `<header><div><b>🍬 Sugar Trade</b><br><small>${esc(me.name)}${sb ? '' : ' · demo mode (this device only)'}</small></div>
+  $('#app').innerHTML = `<header><div><b>🍬 ${esc(BIZ.name)}</b><br><small>${esc(me.name)}${me.owner ? ' · owner' : ''}${sb ? '' : ' · demo mode (this device only)'}</small></div>
     <button class="g" onclick="logout()">${sb ? 'Logout' : 'Rename'}</button></header>
     <main>${VIEWS[tab]()}</main>
-    <nav>${TABS.map(t => `<button class="${tab === t[0] ? 'on' : ''}" onclick="tab='${t[0]}';render()"><span>${t[1]}</span>${t[2]}</button>`).join('')}</nav>`;
+    <nav>${TABS.map(t => `<button class="${tab === t[0] ? 'on' : ''}" onclick="tab='${t[0]}';stmt=null;render()"><span>${t[1]}</span>${t[2]}</button>`).join('')}</nav>`;
 }
-window.render = render; window.addClient = addClient; window.addPurchase = addPurchase; window.addSale = addSale; window.addPayment = addPayment; window.csv = csv;
-window.logout = async () => { if (sb) { await sb.auth.signOut(); location.reload(); } else { localStorage.removeItem('sg_me'); boot(); } };
+async function logout() { if (sb) { await sb.auth.signOut(); location.reload(); } else { localStorage.removeItem('sg_me'); boot(); } }
 
 /* ---------- boot / login ---------- */
 function loginScreen(msg) {
-  $('#app').innerHTML = `<div class="login"><h2>🍬 Sugar Trade</h2><form id="lf"><label>Email<input name="e" type="email" required></label>
+  $('#app').innerHTML = `<div class="login"><h2>🍬 ${esc(BIZ.name)}</h2><form id="lf"><label>Email<input name="e" type="email" required></label>
     <label>Password<input name="p" type="password" required></label><p class="bad">${esc(msg || '')}</p><div class="row"><button class="p">Login</button></div></form></div>`;
-  $('#lf').onsubmit = async e => { e.preventDefault();
+  $('#lf').onsubmit = async e => {
+    e.preventDefault();
     const { error } = await sb.auth.signInWithPassword({ email: e.target.e.value, password: e.target.p.value });
-    error ? loginScreen(error.message) : boot(); };
+    error ? loginScreen(error.message) : boot();
+  };
 }
 async function boot() {
   try {
@@ -199,7 +411,7 @@ async function boot() {
       const { data: prof } = await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
       me = { name: (prof && prof.name) || session.user.email, owner: !!prof && prof.role === 'owner' };
     } else {
-      let n = localStorage.getItem('sg_me') || prompt('Your name?') || 'Owner'; localStorage.setItem('sg_me', n); me = { name: n, owner: true };
+      const n = localStorage.getItem('sg_me') || prompt('Your name?') || 'Owner'; localStorage.setItem('sg_me', n); me = { name: n, owner: true };
     }
     await loadAll(); render();
   } catch (e) { $('#app').innerHTML = `<main><div class="card bad">Could not load: ${esc(e.message)}</div></main>`; }
